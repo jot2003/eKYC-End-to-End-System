@@ -4,7 +4,10 @@ from pathlib import Path
 
 class Settings(BaseSettings):
     vlm_mode: str = "api"
-    openai_api_key: str = ""
+
+    azure_openai_key: str = ""
+    azure_openai_endpoint: str = ""
+    azure_openai_deployment: str = "gpt-5.3-chat"
 
     app_host: str = "0.0.0.0"
     app_port: int = 8000
