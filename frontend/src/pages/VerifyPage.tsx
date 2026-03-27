@@ -16,6 +16,8 @@ import {
   Camera,
   Loader2,
   AlertTriangle,
+  Eye,
+  Check,
 } from 'lucide-react';
 
 const EKYC_STEPS = [
