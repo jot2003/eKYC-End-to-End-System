@@ -1,25 +1,31 @@
+import logging
+
 import cv2
 import numpy as np
 
 from backend.models.schemas import QualityResult
 
+logger = logging.getLogger(__name__)
+
 
 def assess_quality(image: np.ndarray) -> QualityResult:
-    """Check image quality before processing. Reject blurry/dark/low-res images early."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
     blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
     brightness = float(gray.mean())
     h, w = image.shape[:2]
 
+    logger.info("Quality check: blur=%.1f, brightness=%.1f, resolution=%dx%d",
+                blur_score, brightness, w, h)
+
     issues: list[str] = []
-    if blur_score < 15:
+    if blur_score < 8:
         issues.append("Ảnh bị mờ. Vui lòng chụp lại rõ nét hơn.")
-    if brightness < 40:
+    if brightness < 30:
         issues.append("Ảnh quá tối. Vui lòng chụp ở nơi đủ sáng.")
-    if brightness > 245:
+    if brightness > 250:
         issues.append("Ảnh bị cháy sáng. Vui lòng tránh ánh sáng trực tiếp.")
-    if min(h, w) < 200:
+    if min(h, w) < 150:
         issues.append("Độ phân giải quá thấp. Vui lòng chụp ảnh chất lượng cao hơn.")
 
     return QualityResult(

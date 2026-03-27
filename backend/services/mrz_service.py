@@ -65,38 +65,59 @@ def _extract_mrz_lines(text: str) -> list[str]:
 
     for line in text.split("\n"):
         cleaned = line.strip().upper().replace(" ", "")
-        cleaned = cleaned.replace("O", "0").replace("I", "1") if len(cleaned) > 25 else cleaned
+        cleaned = cleaned.replace("Đ", "D").replace("đ", "d")
+        cleaned = re.sub(r"[^A-Z0-9<]", "", cleaned)
 
-        matches = mrz_pattern.findall(cleaned)
-        for m in matches:
-            if len(m) >= 25 and m.count("<") >= 1:
-                candidates.append(m[:30])
+        if len(cleaned) >= 25:
+            matches = mrz_pattern.findall(cleaned)
+            for m in matches:
+                if len(m) >= 25 and m.count("<") >= 1:
+                    padded = m.ljust(30, "<")[:30]
+                    candidates.append(padded)
 
-    if len(candidates) >= 3:
-        return candidates[:3]
-    elif len(candidates) >= 2:
-        return candidates[:2]
-    elif len(candidates) >= 1:
-        return candidates[:1]
+    if not candidates:
+        return []
 
-    return []
+    ordered = []
+    for c in candidates:
+        if c.startswith("IDVNM") or c.startswith("1DVNM"):
+            ordered.insert(0, c)
+        elif "<<" in c and re.search(r"[A-Z]{3,}", c):
+            ordered.append(c)
+        else:
+            ordered.insert(len(ordered) // 2 if ordered else 0, c)
+
+    return ordered[:3]
 
 
 def _extract_document_number(line1: str) -> str | None:
-    """Extract 12-digit CCCD number from MRZ line 1."""
-    digits = re.findall(r"\d{12}", line1)
-    if digits:
-        return digits[0]
+    """Extract 12-digit CCCD number from MRZ line 1.
 
-    cleaned = line1.replace("<", "")
+    TD1 Line 1 layout (30 chars):
+      [0:2]  Type (ID)
+      [2:5]  Country (VNM)
+      [5:14] Document number (9 digits)
+      [14]   Check digit
+      [15:27] Optional data → 12-digit CCCD number
+      [27:30] Filler / check
+    """
     if line1.startswith("IDVNM") or line1.startswith("1DVNM"):
-        remaining = line1[5:].replace("<", "")
-        digits = re.findall(r"\d{12}", remaining)
-        if digits:
-            return digits[0]
-        digits = re.findall(r"\d{9,12}", remaining)
-        if digits:
-            return digits[0].zfill(12)
+        if len(line1) >= 27:
+            optional = line1[15:27].replace("<", "")
+            cccd_digits = re.sub(r"\D", "", optional)
+            if len(cccd_digits) == 12:
+                return cccd_digits
+            if len(cccd_digits) >= 9:
+                return cccd_digits.zfill(12)
+
+        doc_num = line1[5:14].replace("<", "")
+        doc_digits = re.sub(r"\D", "", doc_num)
+        if len(doc_digits) >= 9:
+            return doc_digits.zfill(12)
+
+    all_digits = re.findall(r"\d{12}", line1)
+    if all_digits:
+        return all_digits[-1]
 
     return None
 

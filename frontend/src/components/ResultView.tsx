@@ -1,16 +1,18 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Download } from 'lucide-react';
+import AnnotatedImage from './AnnotatedImage';
 
 const FIELD_LABELS: Record<string, string> = {
-  so_cccd: 'Số CCCD',
+  so_cccd: 'Số căn cước',
   ho_ten: 'Họ và tên',
   ngay_sinh: 'Ngày sinh',
   gioi_tinh: 'Giới tính',
   quoc_tich: 'Quốc tịch',
-  que_quan: 'Quê quán',
-  noi_thuong_tru: 'Nơi thường trú',
+  que_quan: 'Quê quán / Nơi ĐKKS',
+  noi_thuong_tru: 'Nơi cư trú',
   ngay_het_han: 'Ngày hết hạn',
   ngay_cap: 'Ngày cấp',
+  noi_cap: 'Nơi cấp',
   dac_diem_nhan_dang: 'Đặc điểm nhận dạng',
 };
 
@@ -32,12 +34,38 @@ interface ResultViewProps {
 
 export default function ResultView({ result, showHeader = true }: ResultViewProps) {
   const [activeTab, setActiveTab] = useState<'summary' | 'compare' | 'sources' | 'raw'>('summary');
+  const [highlightedField, setHighlightedField] = useState<string | null>(null);
 
   const identity = result.identity || {};
   const verification = result.verification || {};
   const crossDetails = verification.cross_check_details || [];
   const sources = result.sources || {};
   const sourceCount = verification.source_count || 2;
+  const bboxes = result.ocr_bboxes || [];
+  const imagePaths = result.image_paths || {};
+
+  const cccdImageUrl = imagePaths.cccd_front
+    ? `/uploads/${imagePaths.cccd_front.split(/[/\\]/).pop()}`
+    : null;
+
+  const fieldBboxMap = useMemo(() => {
+    if (!bboxes.length) return {};
+    const map: Record<string, number[]> = {};
+    for (const [fieldKey, fieldValue] of Object.entries(identity)) {
+      if (!fieldValue) continue;
+      const fv = (fieldValue as string).toLowerCase();
+      for (let i = 0; i < bboxes.length; i++) {
+        const btext = (bboxes[i].text || '').toLowerCase();
+        if (btext.length < 2) continue;
+        if (fv.includes(btext) || btext.includes(fv) ||
+            (fv.length > 4 && btext.length > 4 && levenshteinSim(fv, btext) > 0.6)) {
+          if (!map[fieldKey]) map[fieldKey] = [];
+          map[fieldKey].push(i);
+        }
+      }
+    }
+    return map;
+  }, [bboxes, identity]);
 
   function downloadJSON() {
     const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
@@ -134,21 +162,68 @@ export default function ResultView({ result, showHeader = true }: ResultViewProp
       </div>
 
       {activeTab === 'summary' && (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div className="px-6 py-4 border-b border-slate-100">
-            <h2 className="text-base font-semibold text-slate-900">Thông tin trích xuất</h2>
-            <p className="text-[11px] text-slate-400 mt-0.5">Kết quả cuối cùng sau khi cross-check OCR và VLM</p>
-          </div>
-          <div className="divide-y divide-slate-50">
-            {Object.entries(identity).map(([key, value]) => (
-              <div key={key} className="px-6 py-3 flex items-center">
-                <span className="w-36 text-sm text-slate-400 shrink-0">{FIELD_LABELS[key] || key}</span>
-                <span className="text-sm text-slate-900 font-medium flex-1">{(value as string) || '—'}</span>
-                {crossDetails.find((d: any) => d.field === key) && (
-                  <SourceBadge source={crossDetails.find((d: any) => d.field === key)?.chosen_source} />
-                )}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {cccdImageUrl && bboxes.length > 0 && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="px-6 py-3 border-b border-slate-100">
+                <h3 className="text-sm font-semibold text-slate-900">Ảnh CCCD (OCR Annotation)</h3>
+                <p className="text-[10px] text-slate-400 mt-0.5">Di chuột vào ảnh hoặc bấm vào trường bên phải để highlight</p>
               </div>
-            ))}
+              <div className="p-3">
+                <AnnotatedImage
+                  imageSrc={cccdImageUrl}
+                  bboxes={bboxes}
+                  highlightedField={highlightedField}
+                  fieldBboxMap={fieldBboxMap}
+                  onBboxHover={(idx) => {
+                    if (idx === null) return;
+                    const btext = bboxes[idx]?.text?.toLowerCase();
+                    if (!btext) return;
+                    for (const [field, indices] of Object.entries(fieldBboxMap)) {
+                      if ((indices as number[]).includes(idx)) {
+                        setHighlightedField(field);
+                        return;
+                      }
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100">
+              <h2 className="text-base font-semibold text-slate-900">Thông tin trích xuất</h2>
+              <p className="text-[11px] text-slate-400 mt-0.5">Bấm vào trường để highlight trên ảnh</p>
+            </div>
+            <div className="divide-y divide-slate-50">
+              {Object.entries(identity).map(([key, value]) => {
+                const isActive = highlightedField === key;
+                const hasBbox = fieldBboxMap[key]?.length > 0;
+                return (
+                  <div
+                    key={key}
+                    className={`px-6 py-3 flex items-center transition-colors ${
+                      isActive ? 'bg-blue-50/70' : hasBbox ? 'hover:bg-slate-50 cursor-pointer' : ''
+                    }`}
+                    onMouseEnter={() => hasBbox && setHighlightedField(key)}
+                    onMouseLeave={() => setHighlightedField(null)}
+                    onClick={() => hasBbox && setHighlightedField(isActive ? null : key)}
+                  >
+                    <span className="w-36 text-sm text-slate-400 shrink-0">{FIELD_LABELS[key] || key}</span>
+                    <span className={`text-sm text-slate-900 font-medium flex-1 ${key === 'so_cccd' ? 'font-mono' : ''}`}>
+                      {key === 'so_cccd' && value ? String(value).padStart(12, '0') : (value as string) || '—'}
+                    </span>
+                    {crossDetails.find((d: any) => d.field === key) && (
+                      <SourceBadge source={crossDetails.find((d: any) => d.field === key)?.chosen_source} />
+                    )}
+                    {hasBbox && (
+                      <span className="ml-2 w-2 h-2 rounded-full bg-blue-400 shrink-0" title="Có vùng trên ảnh" />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -175,8 +250,8 @@ export default function ResultView({ result, showHeader = true }: ResultViewProp
                   {crossDetails.map((d: any) => (
                     <tr key={d.field} className="hover:bg-slate-50/50">
                       <td className="px-4 py-2.5 font-medium text-slate-700">{FIELD_LABELS[d.field] || d.field}</td>
-                      <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{d.ocr_value || '—'}</td>
-                      <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{d.vlm_value || '—'}</td>
+                      <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{d.field === 'so_cccd' && d.ocr_value ? String(d.ocr_value).padStart(12, '0') : d.ocr_value || '—'}</td>
+                      <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{d.field === 'so_cccd' && d.vlm_value ? String(d.vlm_value).padStart(12, '0') : d.vlm_value || '—'}</td>
                       <td className="px-4 py-2.5 text-center"><SimilarityBadge value={d.similarity} /></td>
                       <td className="px-4 py-2.5 text-center"><SourceBadge source={d.chosen_source} /></td>
                     </tr>
@@ -305,4 +380,20 @@ function SourceBadge({ source }: { source?: string }) {
       {source.toUpperCase().replace('_', ' ')}
     </span>
   );
+}
+
+function levenshteinSim(a: string, b: string): number {
+  const la = a.length, lb = b.length;
+  if (la === 0 || lb === 0) return 0;
+  const dp: number[][] = Array.from({ length: la + 1 }, (_, i) =>
+    Array.from({ length: lb + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
+  );
+  for (let i = 1; i <= la; i++) {
+    for (let j = 1; j <= lb; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return 1 - dp[la][lb] / Math.max(la, lb);
 }

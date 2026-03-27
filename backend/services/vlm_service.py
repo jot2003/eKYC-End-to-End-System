@@ -11,9 +11,13 @@ from backend.utils.image_utils import encode_image_base64
 
 logger = logging.getLogger(__name__)
 
-CCCD_FRONT_PROMPT = """Bạn là hệ thống đọc Căn cước công dân (CCCD) Việt Nam.
-Hãy nhìn ảnh CCCD MẶT TRƯỚC này và trích xuất thông tin.
-Trả về ĐÚNG format JSON sau, KHÔNG giải thích thêm:
+CCCD_FRONT_PROMPT = """Bạn là hệ thống trích xuất thông tin từ thẻ Căn cước / Căn cước công dân (CCCD) Việt Nam.
+Lưu ý: Có 2 loại thẻ:
+- Thẻ "CĂN CƯỚC" (format mới 2024): mặt trước có Số, Họ và tên, Ngày sinh, Giới tính, Quốc tịch.
+- Thẻ "CĂN CƯỚC CÔNG DÂN" (format cũ): mặt trước có thêm Quê quán, Nơi thường trú, Có giá trị đến.
+
+Hãy nhìn ảnh MẶT TRƯỚC và trích xuất tất cả thông tin có thể đọc được.
+Trả về ĐÚNG format JSON sau:
 {
   "so_cccd": "",
   "ho_ten": "",
@@ -24,32 +28,48 @@ Trả về ĐÚNG format JSON sau, KHÔNG giải thích thêm:
   "noi_thuong_tru": "",
   "ngay_het_han": ""
 }
-Nếu không đọc được trường nào, dùng null.
-CHỈ trả về JSON, không có markdown hay giải thích."""
+- Nếu trường nào KHÔNG CÓ trên thẻ hoặc không đọc được, dùng null.
+- Ngày tháng ghi theo format DD/MM/YYYY.
+- CHỈ trả về JSON, KHÔNG giải thích."""
 
-CCCD_BACK_PROMPT = """Bạn là hệ thống đọc Căn cước công dân (CCCD) Việt Nam.
-Hãy nhìn ảnh CCCD MẶT SAU này và trích xuất thông tin.
-Mặt sau chứa: đặc điểm nhận dạng, ngày cấp, và có thể có MRZ (Machine Readable Zone) gồm 3 dòng ký tự.
-Trả về ĐÚNG format JSON sau, KHÔNG giải thích thêm:
+CCCD_BACK_PROMPT = """Bạn là hệ thống trích xuất thông tin từ mặt sau thẻ Căn cước / Căn cước công dân Việt Nam.
+Lưu ý: Có 2 loại thẻ:
+- Thẻ "CĂN CƯỚC" (format mới 2024): mặt sau có Nơi cư trú, Nơi đăng ký khai sinh, Ngày tháng năm cấp, Ngày tháng năm hết hạn, Nơi cấp, và có thể có MRZ + QR code.
+- Thẻ "CĂN CƯỚC CÔNG DÂN" (format cũ): mặt sau có Đặc điểm nhận dạng, Ngày tháng năm cấp, và có thể có MRZ.
+
+Hãy nhìn ảnh MẶT SAU và trích xuất tất cả thông tin có thể đọc được.
+Trả về ĐÚNG format JSON sau:
 {
+  "noi_cu_tru": "",
+  "noi_dang_ky_khai_sinh": "",
   "ngay_cap": "",
+  "ngay_het_han": "",
+  "noi_cap": "",
   "dac_diem_nhan_dang": "",
   "mrz_line_1": "",
   "mrz_line_2": "",
   "mrz_line_3": ""
 }
-Nếu không đọc được trường nào, dùng null.
-CHỈ trả về JSON, không có markdown hay giải thích."""
+- Nếu trường nào KHÔNG CÓ trên thẻ hoặc không đọc được, dùng null.
+- Ngày tháng ghi theo format DD/MM/YYYY.
+- CHỈ trả về JSON, KHÔNG giải thích."""
 
-CCCD_FRONT_EMPTY = {
+CCCD_FRONT_EMPTY: dict[str, str | None] = {
     "so_cccd": None, "ho_ten": None, "ngay_sinh": None,
     "gioi_tinh": None, "quoc_tich": None, "que_quan": None,
     "noi_thuong_tru": None, "ngay_het_han": None,
 }
 
-CCCD_BACK_EMPTY = {
-    "ngay_cap": None, "dac_diem_nhan_dang": None,
+CCCD_BACK_EMPTY: dict[str, str | None] = {
+    "noi_cu_tru": None, "noi_dang_ky_khai_sinh": None,
+    "ngay_cap": None, "ngay_het_han": None, "noi_cap": None,
+    "dac_diem_nhan_dang": None,
     "mrz_line_1": None, "mrz_line_2": None, "mrz_line_3": None,
+}
+
+BACK_FIELD_MAP: dict[str, str] = {
+    "noi_cu_tru": "noi_thuong_tru",
+    "noi_dang_ky_khai_sinh": "que_quan",
 }
 
 
@@ -80,12 +100,24 @@ class VLMService:
         return self._extract_with_prompt(image, CCCD_FRONT_PROMPT, CCCD_FRONT_EMPTY)
 
     def extract_cccd_back(self, image: np.ndarray) -> dict[str, str | None]:
-        return self._extract_with_prompt(image, CCCD_BACK_PROMPT, CCCD_BACK_EMPTY)
+        raw = self._extract_with_prompt(image, CCCD_BACK_PROMPT, CCCD_BACK_EMPTY)
+        return self._map_back_fields(raw)
+
+    @staticmethod
+    def _map_back_fields(raw: dict[str, str | None]) -> dict[str, str | None]:
+        mapped: dict[str, str | None] = {}
+        for k, v in raw.items():
+            target = BACK_FIELD_MAP.get(k, k)
+            if target in mapped and mapped[target]:
+                continue
+            mapped[target] = v
+        return mapped
 
     def _extract_with_prompt(
         self, image: np.ndarray, prompt: str, empty_result: dict
     ) -> dict[str, str | None]:
-        base64_img = encode_image_base64(image)
+        enhanced = self._enhance_image(image)
+        base64_img = encode_image_base64(enhanced)
 
         try:
             response = self._client.chat.completions.create(
@@ -105,18 +137,35 @@ class VLMService:
                         ],
                     }
                 ],
-                max_completion_tokens=500,
+                max_completion_tokens=800,
             )
 
             raw_text = response.choices[0].message.content or ""
             logger.info("VLM raw response length: %d chars", len(raw_text))
-            return self._parse_json(raw_text)
+            logger.debug("VLM raw: %s", raw_text[:500])
+            return self._parse_json(raw_text, empty_result)
 
         except Exception as e:
             logger.error("VLM extraction failed: %s", e)
             return dict(empty_result)
 
-    def _parse_json(self, raw: str) -> dict[str, str | None]:
+    @staticmethod
+    def _enhance_image(image: np.ndarray) -> np.ndarray:
+        h, w = image.shape[:2]
+        if max(h, w) < 800:
+            scale = 800 / max(h, w)
+            image = cv2.resize(image, (int(w * scale), int(h * scale)),
+                               interpolation=cv2.INTER_CUBIC)
+
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l_ch, a_ch, b_ch = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l_ch = clahe.apply(l_ch)
+        enhanced = cv2.merge([l_ch, a_ch, b_ch])
+        return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+    @staticmethod
+    def _parse_json(raw: str, fallback: dict) -> dict[str, str | None]:
         cleaned = raw.strip()
 
         json_match = re.search(r"\{[\s\S]*\}", cleaned)
@@ -132,8 +181,4 @@ class VLMService:
             return {k: (v if v else None) for k, v in data.items()}
         except json.JSONDecodeError:
             logger.warning("Could not parse VLM response as JSON: %s", cleaned[:200])
-            return {
-                "so_cccd": None, "ho_ten": None, "ngay_sinh": None,
-                "gioi_tinh": None, "quoc_tich": None, "que_quan": None,
-                "noi_thuong_tru": None, "ngay_het_han": None,
-            }
+            return dict(fallback)

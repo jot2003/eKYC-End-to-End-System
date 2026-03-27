@@ -23,6 +23,7 @@ class VerificationRecord(Base):
     vlm_result = Column(JSON, nullable=True)
     merged_result = Column(JSON, nullable=True)
     ocr_vlm_agreement = Column(Float, nullable=True)
+    cross_check_details = Column(JSON, nullable=True)
     face_score = Column(Float, nullable=True)
     face_status = Column(String, nullable=True)
     overall_confidence = Column(Float, nullable=True)

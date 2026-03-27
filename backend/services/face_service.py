@@ -14,7 +14,7 @@ _face3d.mesh = types.ModuleType("insightface.thirdparty.face3d.mesh")
 sys.modules["insightface.thirdparty.face3d"] = _face3d
 sys.modules["insightface.thirdparty.face3d.mesh"] = _face3d.mesh
 
-COSINE_MATCH_THRESHOLD = 0.40
+COSINE_MATCH_THRESHOLD = 0.35
 
 
 class FaceService:
@@ -42,22 +42,65 @@ class FaceService:
     def verify(self, cccd_image: np.ndarray, selfie_image: np.ndarray) -> FaceResult:
         cccd_faces = self._app.get(cccd_image)
         if not cccd_faces:
-            logger.warning("No face detected on CCCD image")
-            return FaceResult(status="no_face_on_cccd", score=0.0)
+            enhanced = self._enhance_for_detection(cccd_image)
+            cccd_faces = self._app.get(enhanced)
+            if not cccd_faces:
+                logger.warning("No face detected on CCCD image (even after enhancement)")
+                return FaceResult(status="no_face_on_cccd", score=0.0)
+            logger.info("Face found on CCCD after enhancement")
 
         selfie_faces = self._app.get(selfie_image)
         if not selfie_faces:
             logger.warning("No face detected on selfie")
             return FaceResult(status="no_face_on_selfie", score=0.0)
 
-        cccd_emb = cccd_faces[0].embedding
-        selfie_emb = selfie_faces[0].embedding
+        cccd_face = self._pick_largest_face(cccd_faces)
+        selfie_face = self._pick_largest_face(selfie_faces)
 
-        score = float(self._cosine_similarity(cccd_emb, selfie_emb))
-        status = "match" if score >= COSINE_MATCH_THRESHOLD else "no_match"
+        raw_score = float(self._cosine_similarity(cccd_face.embedding, selfie_face.embedding))
+        status = "match" if raw_score >= COSINE_MATCH_THRESHOLD else "no_match"
+        display_score = self._to_display_score(raw_score)
 
-        logger.info("Face verification: score=%.4f, status=%s", score, status)
-        return FaceResult(status=status, score=round(score, 4))
+        logger.info("Face verification: raw=%.4f, display=%.4f, status=%s",
+                     raw_score, display_score, status)
+        return FaceResult(status=status, score=round(display_score, 4))
+
+    @staticmethod
+    def _to_display_score(raw: float) -> float:
+        """Map raw ArcFace cosine similarity to intuitive 0-100% scale.
+
+        ArcFace cosine similarity ranges:
+          same person  : 0.3 - 0.7 typically
+          diff person  : -0.2 - 0.3
+        We map to a scale where the match threshold (0.35) shows ~75%.
+        """
+        if raw <= 0:
+            return 0.0
+        if raw < COSINE_MATCH_THRESHOLD:
+            return raw / COSINE_MATCH_THRESHOLD * 0.7
+        return min(1.0, 0.7 + (raw - COSINE_MATCH_THRESHOLD) / (1.0 - COSINE_MATCH_THRESHOLD) * 0.3)
+
+    @staticmethod
+    def _pick_largest_face(faces: list) -> object:
+        if len(faces) == 1:
+            return faces[0]
+        return max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+
+    @staticmethod
+    def _enhance_for_detection(image: np.ndarray) -> np.ndarray:
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l_ch, a_ch, b_ch = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        l_ch = clahe.apply(l_ch)
+        enhanced = cv2.merge([l_ch, a_ch, b_ch])
+        enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+        h, w = enhanced.shape[:2]
+        if max(h, w) < 640:
+            scale = 640 / max(h, w)
+            enhanced = cv2.resize(enhanced, (int(w * scale), int(h * scale)),
+                                  interpolation=cv2.INTER_CUBIC)
+        return enhanced
 
     @staticmethod
     def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:

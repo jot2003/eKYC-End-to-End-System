@@ -48,3 +48,4 @@ class VerifyResponse(BaseModel):
     processing_time_ms: float
     ocr_bboxes: list[dict] | None = None
     quality_issues: list[str] | None = None
+    image_paths: dict[str, str | None] | None = None
