@@ -12,10 +12,12 @@ from backend.models.schemas import VerifyResponse
 from backend.services.image_quality import assess_quality
 from backend.services.preprocessing import preprocess
 from backend.services.ocr_service import OCRService
-from backend.services.field_extractor import extract_cccd_fields
+from backend.services.field_extractor import extract_cccd_fields, extract_cccd_back_fields
 from backend.services.vlm_service import VLMService
 from backend.services.cross_checker import cross_check
 from backend.services.face_service import FaceService
+from backend.services.qr_service import decode_qr
+from backend.services.mrz_service import parse_mrz
 from backend.utils.image_utils import read_image_from_bytes, save_upload
 from backend.utils.config import UPLOAD_PATH
 
@@ -52,6 +54,7 @@ def get_face() -> FaceService:
 async def verify_identity(
     cccd_image: UploadFile = File(..., description="CCCD front image"),
     selfie_image: UploadFile = File(..., description="Selfie image"),
+    cccd_back_image: UploadFile | None = File(None, description="CCCD back image (optional)"),
     db: Session = Depends(get_db),
 ):
     start = time.time()
@@ -59,18 +62,23 @@ async def verify_identity(
 
     cccd_bytes = await cccd_image.read()
     selfie_bytes = await selfie_image.read()
+    cccd_back_bytes = await cccd_back_image.read() if cccd_back_image else None
 
     try:
         cccd_img = read_image_from_bytes(cccd_bytes)
         selfie_img = read_image_from_bytes(selfie_bytes)
+        cccd_back_img = read_image_from_bytes(cccd_back_bytes) if cccd_back_bytes else None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     cccd_quality = assess_quality(cccd_img)
     selfie_quality = assess_quality(selfie_img)
-
     all_issues = [f"[CCCD] {i}" for i in cccd_quality.issues] + \
                  [f"[Selfie] {i}" for i in selfie_quality.issues]
+
+    if cccd_back_img is not None:
+        back_quality = assess_quality(cccd_back_img)
+        all_issues += [f"[CCCD_Back] {i}" for i in back_quality.issues]
 
     if not cccd_quality.passed or not selfie_quality.passed:
         elapsed = (time.time() - start) * 1000
@@ -82,7 +90,6 @@ async def verify_identity(
         )
         db.add(record)
         db.commit()
-
         return VerifyResponse(
             request_id=request_id,
             status="quality_error",
@@ -92,30 +99,93 @@ async def verify_identity(
 
     cccd_path = save_upload(cccd_bytes, UPLOAD_PATH, suffix=".jpg")
     selfie_path = save_upload(selfie_bytes, UPLOAD_PATH, suffix=".jpg")
+    cccd_back_path_str = None
+    if cccd_back_bytes:
+        cccd_back_path = save_upload(cccd_back_bytes, UPLOAD_PATH, suffix=".jpg")
+        cccd_back_path_str = str(cccd_back_path)
 
     cccd_preprocessed = preprocess(cccd_img)
 
+    # --- Front side: OCR + VLM ---
     try:
         ocr_svc = get_ocr()
         ocr_result = ocr_svc.extract(cccd_preprocessed)
         ocr_fields = extract_cccd_fields(ocr_result.full_text, ocr_result.lines)
-        logger.info("[%s] OCR done: %d lines", request_id, len(ocr_result.lines))
+        logger.info("[%s] OCR front done: %d lines", request_id, len(ocr_result.lines))
     except Exception:
-        logger.error("[%s] OCR failed:\n%s", request_id, traceback.format_exc())
+        logger.error("[%s] OCR front failed:\n%s", request_id, traceback.format_exc())
         ocr_result = None
         ocr_fields = {}
 
     try:
         vlm_svc = get_vlm()
         vlm_fields = vlm_svc.extract_cccd(cccd_img)
-        logger.info("[%s] VLM done", request_id)
+        logger.info("[%s] VLM front done", request_id)
     except Exception:
-        logger.error("[%s] VLM failed:\n%s", request_id, traceback.format_exc())
+        logger.error("[%s] VLM front failed:\n%s", request_id, traceback.format_exc())
         vlm_fields = {}
 
-    cross_result = cross_check(ocr_fields, vlm_fields)
-    logger.info("[%s] Cross-check: agreement=%.2f", request_id, cross_result.agreement)
+    # --- Back side: OCR + VLM + QR + MRZ ---
+    qr_fields = None
+    mrz_fields = None
+    ocr_back_fields = {}
+    vlm_back_fields = {}
 
+    if cccd_back_img is not None:
+        back_preprocessed = preprocess(cccd_back_img)
+
+        try:
+            ocr_back_result = ocr_svc.extract(back_preprocessed)
+            ocr_back_fields = extract_cccd_back_fields(
+                ocr_back_result.full_text, ocr_back_result.lines
+            )
+            logger.info("[%s] OCR back done: %d lines", request_id, len(ocr_back_result.lines))
+
+            mrz_fields = parse_mrz(ocr_back_result.full_text)
+            if mrz_fields:
+                logger.info("[%s] MRZ parsed: %d fields", request_id,
+                            sum(1 for v in mrz_fields.values() if v))
+        except Exception:
+            logger.error("[%s] OCR/MRZ back failed:\n%s", request_id, traceback.format_exc())
+
+        try:
+            vlm_back_fields = vlm_svc.extract_cccd_back(cccd_back_img)
+            logger.info("[%s] VLM back done", request_id)
+
+            if vlm_back_fields.get("mrz_line_1") and not mrz_fields:
+                mrz_text = "\n".join(filter(None, [
+                    vlm_back_fields.get("mrz_line_1"),
+                    vlm_back_fields.get("mrz_line_2"),
+                    vlm_back_fields.get("mrz_line_3"),
+                ]))
+                mrz_fields = parse_mrz(mrz_text)
+                if mrz_fields:
+                    logger.info("[%s] MRZ parsed from VLM lines", request_id)
+        except Exception:
+            logger.error("[%s] VLM back failed:\n%s", request_id, traceback.format_exc())
+
+        try:
+            qr_fields = decode_qr(cccd_back_img)
+            if qr_fields:
+                logger.info("[%s] QR decoded: %d fields", request_id,
+                            sum(1 for v in qr_fields.values() if v))
+        except Exception:
+            logger.error("[%s] QR decode failed:\n%s", request_id, traceback.format_exc())
+
+    # --- Merge all front+back OCR/VLM fields ---
+    combined_ocr = {**ocr_fields, **ocr_back_fields}
+    combined_vlm = {**vlm_fields}
+    for k, v in vlm_back_fields.items():
+        if k not in ("mrz_line_1", "mrz_line_2", "mrz_line_3") and v:
+            combined_vlm[k] = v
+
+    # --- Cross-check with all available sources ---
+    cross_result = cross_check(combined_ocr, combined_vlm, qr_fields, mrz_fields)
+    source_count = 2 + (1 if qr_fields else 0) + (1 if mrz_fields else 0)
+    logger.info("[%s] Cross-check (%d sources): agreement=%.2f",
+                request_id, source_count, cross_result.agreement)
+
+    # --- Face matching ---
     try:
         face_svc = get_face()
         face_result = face_svc.verify(cccd_img, selfie_img)
@@ -140,8 +210,8 @@ async def verify_identity(
         id=request_id,
         status="success",
         identity=cross_result.merged,
-        ocr_result=ocr_fields,
-        vlm_result=vlm_fields,
+        ocr_result=combined_ocr,
+        vlm_result=combined_vlm,
         merged_result=cross_result.merged,
         ocr_vlm_agreement=cross_result.agreement,
         face_score=face_result.score,
@@ -149,12 +219,31 @@ async def verify_identity(
         overall_confidence=overall,
         quality_issues=all_issues if all_issues else None,
         ocr_bboxes=ocr_bboxes_data,
+        qr_result=qr_fields,
+        mrz_result=mrz_fields,
+        ocr_back_result=ocr_back_fields if ocr_back_fields else None,
+        vlm_back_result=vlm_back_fields if vlm_back_fields else None,
+        source_count=source_count,
         processing_time_ms=elapsed,
         cccd_path=str(cccd_path),
+        cccd_back_path=cccd_back_path_str,
         selfie_path=str(selfie_path),
     )
     db.add(record)
     db.commit()
+
+    sources_data: dict = {
+        "ocr_front": ocr_fields,
+        "vlm_front": vlm_fields,
+    }
+    if ocr_back_fields:
+        sources_data["ocr_back"] = ocr_back_fields
+    if vlm_back_fields:
+        sources_data["vlm_back"] = vlm_back_fields
+    if qr_fields:
+        sources_data["qr"] = qr_fields
+    if mrz_fields:
+        sources_data["mrz"] = mrz_fields
 
     return VerifyResponse(
         request_id=request_id,
@@ -165,11 +254,9 @@ async def verify_identity(
             "cross_check_details": [d.model_dump() for d in cross_result.details],
             "face_match": {"score": face_result.score, "status": face_result.status},
             "overall_confidence": overall,
+            "source_count": source_count,
         },
-        sources={
-            "ocr": ocr_fields,
-            "vlm": vlm_fields,
-        },
+        sources=sources_data,
         processing_time_ms=round(elapsed, 1),
         ocr_bboxes=ocr_bboxes_data,
         quality_issues=all_issues if all_issues else None,
@@ -207,6 +294,8 @@ async def list_results(skip: int = 0, limit: int = 50, db: Session = Depends(get
                 "processing_time_ms": r.processing_time_ms,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "quality_issues": r.quality_issues,
+                "source_count": r.source_count,
+                "has_back": r.cccd_back_path is not None,
             }
             for r in records
         ],
@@ -246,10 +335,7 @@ async def get_result(request_id: str, db: Session = Depends(get_db)):
             "face_match": {"score": record.face_score, "status": record.face_status},
             "overall_confidence": record.overall_confidence,
         } if record.status == "success" else None,
-        sources={
-            "ocr": record.ocr_result,
-            "vlm": record.vlm_result,
-        } if record.status == "success" else None,
+        sources=_build_sources(record) if record.status == "success" else None,
         processing_time_ms=record.processing_time_ms or 0,
         ocr_bboxes=record.ocr_bboxes,
         quality_issues=record.quality_issues,
@@ -259,3 +345,19 @@ async def get_result(request_id: str, db: Session = Depends(get_db)):
 @router.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "DocuMind eKYC API"}
+
+
+def _build_sources(record: VerificationRecord) -> dict:
+    sources: dict = {
+        "ocr_front": record.ocr_result or {},
+        "vlm_front": record.vlm_result or {},
+    }
+    if record.ocr_back_result:
+        sources["ocr_back"] = record.ocr_back_result
+    if record.vlm_back_result:
+        sources["vlm_back"] = record.vlm_back_result
+    if record.qr_result:
+        sources["qr"] = record.qr_result
+    if record.mrz_result:
+        sources["mrz"] = record.mrz_result
+    return sources

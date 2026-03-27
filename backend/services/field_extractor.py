@@ -95,6 +95,40 @@ def _find_value_after_label(line_texts: list[str], label_aliases: list[str]) -> 
     return None
 
 
+def extract_cccd_back_fields(ocr_text: str, ocr_lines: list[OCRLine]) -> dict[str, str | None]:
+    """Extract structured fields from CCCD back side OCR output."""
+    fields: dict[str, str | None] = {
+        "ngay_cap": None,
+        "dac_diem_nhan_dang": None,
+    }
+
+    dates = DATE_PATTERN.findall(ocr_text)
+    if dates:
+        fields["ngay_cap"] = dates[0]
+
+    back_labels = {
+        "dac_diem_nhan_dang": [
+            "Đặc điểm nhận dạng", "Dac diem nhan dang",
+            "Personal identification", "đặc điểm nhận dạng",
+        ],
+        "ngay_cap": [
+            "Ngày, tháng, năm", "Ngày cấp", "Date of issue",
+            "ngày cấp", "Ngay cap", "Date, month, year",
+        ],
+    }
+
+    line_texts = [l.text.strip() for l in ocr_lines]
+    for field_key, aliases in back_labels.items():
+        if fields[field_key] is not None:
+            continue
+        value = _find_value_after_label(line_texts, aliases)
+        if value:
+            fields[field_key] = value
+
+    logger.info("Extracted CCCD back fields: %s", {k: v for k, v in fields.items() if v})
+    return fields
+
+
 def _find_name_heuristic(line_texts: list[str]) -> str | None:
     """Fallback: find a line that looks like a Vietnamese full name (all uppercase, 2-5 words)."""
     for line in line_texts:

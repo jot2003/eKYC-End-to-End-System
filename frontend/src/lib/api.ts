@@ -5,10 +5,13 @@ const api = axios.create({
   timeout: 120000,
 });
 
-export async function verifyIdentity(cccdFile: File, selfieFile: File) {
+export async function verifyIdentity(cccdFile: File, selfieFile: File, cccdBackFile?: File | null) {
   const formData = new FormData();
   formData.append('cccd_image', cccdFile);
   formData.append('selfie_image', selfieFile);
+  if (cccdBackFile) {
+    formData.append('cccd_back_image', cccdBackFile);
+  }
 
   const response = await api.post('/verify', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },

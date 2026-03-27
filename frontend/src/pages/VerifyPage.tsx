@@ -20,12 +20,24 @@ const EKYC_STEPS = [
   { label: 'Kết quả' },
 ];
 
-const PROCESSING_STEPS = [
+const PROCESSING_STEPS_FRONT_ONLY = [
   'Kiểm tra chất lượng ảnh',
   'Tiền xử lý ảnh',
-  'Trích xuất OCR',
-  'Trích xuất VLM',
+  'Trích xuất OCR (mặt trước)',
+  'Trích xuất VLM (mặt trước)',
   'Đối chiếu kết quả',
+  'Xác minh khuôn mặt',
+];
+
+const PROCESSING_STEPS_WITH_BACK = [
+  'Kiểm tra chất lượng ảnh',
+  'Tiền xử lý ảnh',
+  'Trích xuất OCR (mặt trước)',
+  'Trích xuất VLM (mặt trước)',
+  'Trích xuất mặt sau (OCR + VLM)',
+  'Giải mã QR code',
+  'Phân tích MRZ',
+  'Đối chiếu đa nguồn',
   'Xác minh khuôn mặt',
 ];
 
@@ -38,6 +50,10 @@ export default function VerifyPage() {
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const activeProcessingSteps = cccdBackFile
+    ? PROCESSING_STEPS_WITH_BACK
+    : PROCESSING_STEPS_FRONT_ONLY;
+
   async function handleSubmit() {
     if (!cccdFrontFile || !selfieFile) return;
 
@@ -45,20 +61,23 @@ export default function VerifyPage() {
     setProcessingStep(0);
     setError(null);
 
+    const steps = cccdBackFile ? PROCESSING_STEPS_WITH_BACK : PROCESSING_STEPS_FRONT_ONLY;
+    const interval = cccdBackFile ? 2200 : 3000;
+
     const stepInterval = setInterval(() => {
       setProcessingStep((prev) => {
-        if (prev >= PROCESSING_STEPS.length - 1) {
+        if (prev >= steps.length - 1) {
           clearInterval(stepInterval);
           return prev;
         }
         return prev + 1;
       });
-    }, 3000);
+    }, interval);
 
     try {
-      const res = await verifyIdentity(cccdFrontFile, selfieFile);
+      const res = await verifyIdentity(cccdFrontFile, selfieFile, cccdBackFile);
       clearInterval(stepInterval);
-      setProcessingStep(PROCESSING_STEPS.length - 1);
+      setProcessingStep(steps.length - 1);
 
       if (res.status === 'quality_error') {
         setError(res.quality_issues?.join('\n') || 'Ảnh không đạt chất lượng.');
@@ -124,10 +143,10 @@ export default function VerifyPage() {
             selectedFile={cccdBackFile}
             label="Kéo thả ảnh CCCD mặt sau vào đây"
           />
-          <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-            <p className="text-xs text-amber-700">
-              Tính năng xử lý mặt sau CCCD (MRZ + QR) đang được phát triển.
-              Bạn có thể bỏ qua bước này.
+          <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <p className="text-xs text-blue-700">
+              Hệ thống sẽ trích xuất thêm thông tin từ MRZ, QR code trên mặt sau
+              để cross-check đa nguồn, tăng độ tin cậy. Bạn có thể bỏ qua nếu không có ảnh.
             </p>
           </div>
           <StepActions>
@@ -205,7 +224,7 @@ export default function VerifyPage() {
           ) : (
             <div>
               <div className="space-y-3 max-w-md mx-auto">
-                {PROCESSING_STEPS.map((s, i) => (
+                {activeProcessingSteps.map((s, i) => (
                   <div key={s} className="flex items-center gap-3">
                     <div className="w-5 h-5 flex items-center justify-center shrink-0">
                       {i < processingStep ? (
@@ -236,14 +255,14 @@ export default function VerifyPage() {
                     className="h-full bg-blue-600 rounded-full transition-all duration-500"
                     style={{
                       width: `${
-                        ((processingStep + 1) / PROCESSING_STEPS.length) * 100
+                        ((processingStep + 1) / activeProcessingSteps.length) * 100
                       }%`,
                     }}
                   />
                 </div>
                 <p className="text-center text-xs text-slate-400 mt-2">
                   {Math.round(
-                    ((processingStep + 1) / PROCESSING_STEPS.length) * 100
+                    ((processingStep + 1) / activeProcessingSteps.length) * 100
                   )}
                   %
                 </p>

@@ -10,6 +10,19 @@ const FIELD_LABELS: Record<string, string> = {
   que_quan: 'Quê quán',
   noi_thuong_tru: 'Nơi thường trú',
   ngay_het_han: 'Ngày hết hạn',
+  ngay_cap: 'Ngày cấp',
+  dac_diem_nhan_dang: 'Đặc điểm nhận dạng',
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  ocr_front: 'OCR - Mặt trước',
+  vlm_front: 'VLM - Mặt trước',
+  ocr_back: 'OCR - Mặt sau',
+  vlm_back: 'VLM - Mặt sau',
+  qr: 'QR Code',
+  mrz: 'MRZ (Machine Readable Zone)',
+  ocr: 'OCR',
+  vlm: 'VLM',
 };
 
 interface ResultViewProps {
@@ -18,11 +31,13 @@ interface ResultViewProps {
 }
 
 export default function ResultView({ result, showHeader = true }: ResultViewProps) {
-  const [activeTab, setActiveTab] = useState<'summary' | 'compare' | 'raw'>('summary');
+  const [activeTab, setActiveTab] = useState<'summary' | 'compare' | 'sources' | 'raw'>('summary');
 
   const identity = result.identity || {};
   const verification = result.verification || {};
   const crossDetails = verification.cross_check_details || [];
+  const sources = result.sources || {};
+  const sourceCount = verification.source_count || 2;
 
   function downloadJSON() {
     const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
@@ -69,14 +84,28 @@ export default function ResultView({ result, showHeader = true }: ResultViewProp
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <ScoreCard label="OCR-VLM Agreement" score={verification.ocr_vlm_agreement} />
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+        <ScoreCard label="Cross-check Agreement" score={verification.ocr_vlm_agreement} />
         <ScoreCard
           label="Face Match"
           score={verification.face_match?.score}
           status={verification.face_match?.status}
         />
         <ScoreCard label="Overall Confidence" score={verification.overall_confidence} />
+        <div className="bg-white rounded-xl p-4 border border-slate-200">
+          <p className="text-[11px] text-slate-400 mb-1">Nguồn dữ liệu</p>
+          <p className="text-xl font-bold text-slate-900">
+            {sourceCount}
+            <span className="text-xs font-normal text-slate-400 ml-1">nguồn</span>
+          </p>
+          <div className="flex gap-1 mt-1.5 flex-wrap">
+            {Object.keys(sources).map((s) => (
+              <span key={s} className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500">
+                {s.toUpperCase().replace('_', ' ')}
+              </span>
+            ))}
+          </div>
+        </div>
         <div className="bg-white rounded-xl p-4 border border-slate-200">
           <p className="text-[11px] text-slate-400 mb-1">Thời gian xử lý</p>
           <p className="text-xl font-bold text-slate-900">
@@ -88,7 +117,7 @@ export default function ResultView({ result, showHeader = true }: ResultViewProp
 
       <div className="mb-4">
         <div className="flex gap-1 bg-slate-100 rounded-lg p-1 w-fit">
-          {(['summary', 'compare', 'raw'] as const).map((tab) => (
+          {(['summary', 'compare', 'sources', 'raw'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -98,7 +127,7 @@ export default function ResultView({ result, showHeader = true }: ResultViewProp
                   : 'text-slate-500 hover:text-slate-700'
               }`}
             >
-              {tab === 'summary' ? 'Thông tin' : tab === 'compare' ? 'So sánh OCR vs VLM' : 'Raw JSON'}
+              {tab === 'summary' ? 'Thông tin' : tab === 'compare' ? 'Cross-check' : tab === 'sources' ? `Nguồn (${sourceCount})` : 'Raw JSON'}
             </button>
           ))}
         </div>
@@ -160,6 +189,37 @@ export default function ResultView({ result, showHeader = true }: ResultViewProp
               Chi tiết cross-check không khả dụng cho bản ghi này.
               <br />
               <span className="text-xs">Chỉ hiển thị khi xem kết quả trực tiếp từ quy trình xác minh.</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'sources' && (
+        <div className="space-y-4">
+          {Object.entries(sources).map(([sourceName, sourceData]: [string, any]) => (
+            <div key={sourceName} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="px-6 py-3 border-b border-slate-100 flex items-center gap-2">
+                <SourceBadge source={sourceName} />
+                <span className="text-sm font-medium text-slate-700">
+                  {SOURCE_LABELS[sourceName] || sourceName}
+                </span>
+              </div>
+              <div className="divide-y divide-slate-50">
+                {sourceData && Object.entries(sourceData).map(([key, value]: [string, any]) => (
+                  <div key={key} className="px-6 py-2.5 flex items-center">
+                    <span className="w-40 text-sm text-slate-400 shrink-0">{FIELD_LABELS[key] || key}</span>
+                    <span className="text-sm text-slate-900 font-mono">{(value as string) || '—'}</span>
+                  </div>
+                ))}
+                {(!sourceData || Object.keys(sourceData).length === 0) && (
+                  <div className="px-6 py-4 text-sm text-slate-400 text-center">Không có dữ liệu</div>
+                )}
+              </div>
+            </div>
+          ))}
+          {Object.keys(sources).length === 0 && (
+            <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">
+              Không có dữ liệu nguồn.
             </div>
           )}
         </div>
@@ -228,11 +288,21 @@ function SimilarityBadge({ value }: { value: number }) {
 
 function SourceBadge({ source }: { source?: string }) {
   if (!source || source === 'none') return <span className="text-xs text-slate-300">—</span>;
+  const colors: Record<string, string> = {
+    ocr: 'bg-purple-50 text-purple-700',
+    ocr_front: 'bg-purple-50 text-purple-700',
+    ocr_back: 'bg-fuchsia-50 text-fuchsia-700',
+    vlm: 'bg-sky-50 text-sky-700',
+    vlm_front: 'bg-sky-50 text-sky-700',
+    vlm_back: 'bg-cyan-50 text-cyan-700',
+    qr: 'bg-emerald-50 text-emerald-700',
+    mrz: 'bg-amber-50 text-amber-700',
+  };
   return (
     <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
-      source === 'ocr' ? 'bg-purple-50 text-purple-700' : 'bg-sky-50 text-sky-700'
+      colors[source] || 'bg-slate-50 text-slate-600'
     }`}>
-      {source.toUpperCase()}
+      {source.toUpperCase().replace('_', ' ')}
     </span>
   );
 }

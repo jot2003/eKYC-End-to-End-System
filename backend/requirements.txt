@@ -19,4 +19,7 @@ onnxruntime>=1.17.0
 openai>=1.50.0
 python-Levenshtein>=0.26.0
 
+pyzbar>=0.1.9
+qrcode>=8.0
+
 aiofiles>=24.1.0

@@ -30,7 +30,13 @@ class VerificationRecord(Base):
     ocr_bboxes = Column(JSON, nullable=True)
     processing_time_ms = Column(Float, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    qr_result = Column(JSON, nullable=True)
+    mrz_result = Column(JSON, nullable=True)
+    ocr_back_result = Column(JSON, nullable=True)
+    vlm_back_result = Column(JSON, nullable=True)
+    source_count = Column(Float, nullable=True)
     cccd_path = Column(String, nullable=True)
+    cccd_back_path = Column(String, nullable=True)
     selfie_path = Column(String, nullable=True)
 
 
