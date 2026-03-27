@@ -1,9 +1,26 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import Stepper from '../components/Stepper';
 import ImageDropzone from '../components/ImageDropzone';
+import ResultView from '../components/ResultView';
 import { verifyIdentity } from '../lib/api';
+import {
+  ArrowLeft,
+  ArrowRight,
+  SkipForward,
+  ShieldCheck,
+  RotateCcw,
+  Plus,
+} from 'lucide-react';
 
-const STEPS = [
+const EKYC_STEPS = [
+  { label: 'CCCD Trước' },
+  { label: 'CCCD Sau' },
+  { label: 'Selfie' },
+  { label: 'Xử lý' },
+  { label: 'Kết quả' },
+];
+
+const PROCESSING_STEPS = [
   'Kiểm tra chất lượng ảnh',
   'Tiền xử lý ảnh',
   'Trích xuất OCR',
@@ -13,25 +30,24 @@ const STEPS = [
 ];
 
 export default function VerifyPage() {
-  const navigate = useNavigate();
-  const [cccdFile, setCccdFile] = useState<File | null>(null);
+  const [step, setStep] = useState(0);
+  const [cccdFrontFile, setCccdFrontFile] = useState<File | null>(null);
+  const [cccdBackFile, setCccdBackFile] = useState<File | null>(null);
   const [selfieFile, setSelfieFile] = useState<File | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [currentStep, setCurrentStep] = useState(-1);
+  const [processingStep, setProcessingStep] = useState(-1);
+  const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const canSubmit = cccdFile && selfieFile && !isProcessing;
+  async function handleSubmit() {
+    if (!cccdFrontFile || !selfieFile) return;
 
-  async function handleVerify() {
-    if (!cccdFile || !selfieFile) return;
-
-    setIsProcessing(true);
+    setStep(3);
+    setProcessingStep(0);
     setError(null);
-    setCurrentStep(0);
 
     const stepInterval = setInterval(() => {
-      setCurrentStep((prev) => {
-        if (prev >= STEPS.length - 1) {
+      setProcessingStep((prev) => {
+        if (prev >= PROCESSING_STEPS.length - 1) {
           clearInterval(stepInterval);
           return prev;
         }
@@ -40,120 +56,251 @@ export default function VerifyPage() {
     }, 3000);
 
     try {
-      const result = await verifyIdentity(cccdFile, selfieFile);
+      const res = await verifyIdentity(cccdFrontFile, selfieFile);
       clearInterval(stepInterval);
-      setCurrentStep(STEPS.length - 1);
+      setProcessingStep(PROCESSING_STEPS.length - 1);
 
-      if (result.status === 'quality_error') {
-        setError(result.quality_issues?.join('\n') || 'Ảnh không đạt chất lượng.');
-        setIsProcessing(false);
-        setCurrentStep(-1);
+      if (res.status === 'quality_error') {
+        setError(res.quality_issues?.join('\n') || 'Ảnh không đạt chất lượng.');
         return;
       }
 
-      setTimeout(() => {
-        navigate(`/result/${result.request_id}`);
-      }, 500);
+      setResult(res);
+      setTimeout(() => setStep(4), 600);
     } catch (err: any) {
       clearInterval(stepInterval);
-      setError(err.response?.data?.detail || 'Có lỗi xảy ra. Vui lòng thử lại.');
-      setIsProcessing(false);
-      setCurrentStep(-1);
+      setError(
+        err.response?.data?.detail || 'Có lỗi xảy ra. Vui lòng thử lại.'
+      );
     }
   }
 
+  function handleReset() {
+    setStep(0);
+    setCccdFrontFile(null);
+    setCccdBackFile(null);
+    setSelfieFile(null);
+    setResult(null);
+    setError(null);
+    setProcessingStep(-1);
+  }
+
   return (
-    <main className="max-w-3xl mx-auto px-6 py-12">
-      <h1 className="text-2xl font-bold text-slate-900 mb-2">Xác minh danh tính</h1>
-      <p className="text-slate-500 mb-10">Upload ảnh CCCD mặt trước và ảnh selfie để bắt đầu.</p>
+    <div className="max-w-4xl mx-auto px-6 py-8">
+      <div className="mb-10">
+        <Stepper steps={EKYC_STEPS} currentStep={step} />
+      </div>
 
-      {!isProcessing ? (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-3">
-                Ảnh CCCD mặt trước
-              </label>
-              <ImageDropzone
-                onFileSelect={setCccdFile}
-                selectedFile={cccdFile}
-                label="Kéo thả ảnh CCCD vào đây"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-3">
-                Ảnh selfie
-              </label>
-              <ImageDropzone
-                onFileSelect={setSelfieFile}
-                selectedFile={selfieFile}
-                label="Kéo thả ảnh selfie vào đây"
-              />
-            </div>
+      {step === 0 && (
+        <StepCard
+          title="Ảnh CCCD mặt trước"
+          subtitle="Chụp hoặc upload ảnh mặt trước căn cước công dân"
+        >
+          <ImageDropzone
+            onFileSelect={setCccdFrontFile}
+            selectedFile={cccdFrontFile}
+            label="Kéo thả ảnh CCCD mặt trước vào đây"
+          />
+          <StepActions>
+            <div />
+            <button
+              onClick={() => setStep(1)}
+              disabled={!cccdFrontFile}
+              className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Tiếp tục <ArrowRight size={16} />
+            </button>
+          </StepActions>
+        </StepCard>
+      )}
+
+      {step === 1 && (
+        <StepCard
+          title="Ảnh CCCD mặt sau"
+          subtitle="Mặt sau chứa MRZ và QR code (tùy chọn)"
+        >
+          <ImageDropzone
+            onFileSelect={setCccdBackFile}
+            selectedFile={cccdBackFile}
+            label="Kéo thả ảnh CCCD mặt sau vào đây"
+          />
+          <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <p className="text-xs text-amber-700">
+              Tính năng xử lý mặt sau CCCD (MRZ + QR) đang được phát triển.
+              Bạn có thể bỏ qua bước này.
+            </p>
           </div>
+          <StepActions>
+            <BackButton onClick={() => setStep(0)} />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setStep(2)}
+                className="flex items-center gap-2 text-slate-500 hover:text-slate-900 text-sm font-medium transition-colors"
+              >
+                Bỏ qua <SkipForward size={16} />
+              </button>
+              {cccdBackFile && (
+                <button
+                  onClick={() => setStep(2)}
+                  className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                >
+                  Tiếp tục <ArrowRight size={16} />
+                </button>
+              )}
+            </div>
+          </StepActions>
+        </StepCard>
+      )}
 
-          {/* Guidelines */}
-          <details className="mb-8 bg-slate-50 rounded-xl p-5 border border-slate-100">
-            <summary className="text-sm font-medium text-slate-600 cursor-pointer">
-              Hướng dẫn chụp ảnh
-            </summary>
-            <ul className="mt-3 space-y-1.5 text-sm text-slate-500">
-              <li>Đặt CCCD trên nền sáng màu, chụp thẳng từ trên xuống</li>
-              <li>Ảnh không bị mờ, không bị cắt xén, không bị bóng đè</li>
-              <li>Ảnh selfie nhìn thẳng, đủ sáng, không đội mũ/đeo kính râm</li>
+      {step === 2 && (
+        <StepCard
+          title="Ảnh selfie"
+          subtitle="Chụp ảnh chân dung để so sánh với ảnh trên CCCD"
+        >
+          <ImageDropzone
+            onFileSelect={setSelfieFile}
+            selectedFile={selfieFile}
+            label="Kéo thả ảnh selfie vào đây"
+          />
+          <div className="mt-4 bg-slate-50 rounded-lg p-4 border border-slate-100">
+            <p className="text-xs font-medium text-slate-600 mb-2">Hướng dẫn</p>
+            <ul className="space-y-1 text-xs text-slate-500">
+              <li>Nhìn thẳng vào camera, đủ sáng</li>
+              <li>Không đội mũ, không đeo kính râm</li>
               <li>Hỗ trợ PNG, JPG, WEBP - tối đa 10MB</li>
             </ul>
-          </details>
+          </div>
+          <StepActions>
+            <BackButton onClick={() => setStep(1)} />
+            <button
+              onClick={handleSubmit}
+              disabled={!selfieFile}
+              className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-lg shadow-blue-600/20"
+            >
+              <ShieldCheck size={16} /> Xác minh
+            </button>
+          </StepActions>
+        </StepCard>
+      )}
 
-          {error && (
-            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 whitespace-pre-line">
-              {error}
+      {step === 3 && (
+        <StepCard
+          title="Đang xử lý"
+          subtitle="Hệ thống đang phân tích ảnh của bạn"
+        >
+          {error ? (
+            <div>
+              <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 whitespace-pre-line mb-6">
+                {error}
+              </div>
+              <div className="flex justify-center">
+                <button
+                  onClick={handleReset}
+                  className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                >
+                  <RotateCcw size={16} /> Thử lại
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div className="space-y-3 max-w-md mx-auto">
+                {PROCESSING_STEPS.map((s, i) => (
+                  <div key={s} className="flex items-center gap-3">
+                    <div className="w-5 h-5 flex items-center justify-center shrink-0">
+                      {i < processingStep ? (
+                        <span className="text-green-500 text-sm font-bold">
+                          &#10003;
+                        </span>
+                      ) : i === processingStep ? (
+                        <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <div className="w-2.5 h-2.5 rounded-full bg-slate-200" />
+                      )}
+                    </div>
+                    <span
+                      className={`text-sm ${
+                        i <= processingStep
+                          ? 'text-slate-900'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {s}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-8">
+                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-600 rounded-full transition-all duration-500"
+                    style={{
+                      width: `${
+                        ((processingStep + 1) / PROCESSING_STEPS.length) * 100
+                      }%`,
+                    }}
+                  />
+                </div>
+                <p className="text-center text-xs text-slate-400 mt-2">
+                  {Math.round(
+                    ((processingStep + 1) / PROCESSING_STEPS.length) * 100
+                  )}
+                  %
+                </p>
+              </div>
             </div>
           )}
+        </StepCard>
+      )}
 
-          <button
-            onClick={handleVerify}
-            disabled={!canSubmit}
-            className="w-full bg-blue-600 text-white py-3.5 rounded-xl text-base font-medium hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-blue-600/20"
-          >
-            Xác minh
-          </button>
-        </>
-      ) : (
-        /* Processing State */
-        <div className="bg-white rounded-2xl p-10 border border-slate-100 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900 mb-8 text-center">Đang xử lý...</h2>
-          <div className="space-y-4 max-w-md mx-auto">
-            {STEPS.map((step, i) => (
-              <div key={step} className="flex items-center gap-4">
-                <div className="w-6 h-6 flex items-center justify-center">
-                  {i < currentStep ? (
-                    <span className="text-green-500 text-lg">&#10003;</span>
-                  ) : i === currentStep ? (
-                    <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <div className="w-3 h-3 rounded-full bg-slate-200" />
-                  )}
-                </div>
-                <span className={`text-sm ${i <= currentStep ? 'text-slate-900' : 'text-slate-400'}`}>
-                  {step}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div className="mt-10">
-            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-blue-600 rounded-full transition-all duration-500 ease-out"
-                style={{ width: `${((currentStep + 1) / STEPS.length) * 100}%` }}
-              />
-            </div>
-            <p className="text-center text-sm text-slate-400 mt-3">
-              {Math.round(((currentStep + 1) / STEPS.length) * 100)}%
-            </p>
+      {step === 4 && result && (
+        <div>
+          <ResultView result={result} />
+          <div className="flex justify-center mt-8">
+            <button
+              onClick={handleReset}
+              className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+            >
+              <Plus size={16} /> Xác minh mới
+            </button>
           </div>
         </div>
       )}
-    </main>
+    </div>
+  );
+}
+
+function StepCard({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 p-8">
+      <h2 className="text-lg font-semibold text-slate-900 mb-1">{title}</h2>
+      <p className="text-sm text-slate-500 mb-6">{subtitle}</p>
+      {children}
+    </div>
+  );
+}
+
+function StepActions({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between mt-6">{children}</div>
+  );
+}
+
+function BackButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 text-slate-500 hover:text-slate-900 text-sm font-medium transition-colors"
+    >
+      <ArrowLeft size={16} /> Quay lại
+    </button>
   );
 }

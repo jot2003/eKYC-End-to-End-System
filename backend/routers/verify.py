@@ -4,6 +4,7 @@ import logging
 import traceback
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.models.database import get_db, VerificationRecord
@@ -181,6 +182,53 @@ def _compute_overall(agreement: float, face_score: float, face_status: str) -> f
 
     face_component = face_score if face_status == "match" else 0.0
     return round(agreement * field_weight + face_component * face_weight, 4)
+
+
+@router.get("/results")
+async def list_results(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
+    total = db.query(func.count(VerificationRecord.id)).scalar() or 0
+    records = (
+        db.query(VerificationRecord)
+        .order_by(VerificationRecord.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "total": total,
+        "items": [
+            {
+                "request_id": r.id,
+                "status": r.status,
+                "identity": r.merged_result,
+                "overall_confidence": r.overall_confidence,
+                "face_score": r.face_score,
+                "face_status": r.face_status,
+                "processing_time_ms": r.processing_time_ms,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "quality_issues": r.quality_issues,
+            }
+            for r in records
+        ],
+    }
+
+
+@router.get("/stats")
+async def get_stats(db: Session = Depends(get_db)):
+    total = db.query(func.count(VerificationRecord.id)).scalar() or 0
+    success = (
+        db.query(func.count(VerificationRecord.id))
+        .filter(VerificationRecord.status == "success")
+        .scalar()
+        or 0
+    )
+    avg_time = db.query(func.avg(VerificationRecord.processing_time_ms)).scalar() or 0
+    return {
+        "total": total,
+        "success": success,
+        "failed": total - success,
+        "avg_processing_time_ms": round(float(avg_time), 1),
+    }
 
 
 @router.get("/results/{request_id}", response_model=VerifyResponse)

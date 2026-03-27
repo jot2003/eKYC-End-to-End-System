@@ -21,6 +21,16 @@ export async function getResult(requestId: string) {
   return response.data;
 }
 
+export async function listResults(skip: number = 0, limit: number = 50) {
+  const response = await api.get('/results', { params: { skip, limit } });
+  return response.data;
+}
+
+export async function getStats() {
+  const response = await api.get('/stats');
+  return response.data;
+}
+
 export async function healthCheck() {
   const response = await api.get('/health');
   return response.data;

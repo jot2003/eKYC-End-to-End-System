@@ -13,7 +13,7 @@ def assess_quality(image: np.ndarray) -> QualityResult:
     h, w = image.shape[:2]
 
     issues: list[str] = []
-    if blur_score < 100:
+    if blur_score < 15:
         issues.append("Ảnh bị mờ. Vui lòng chụp lại rõ nét hơn.")
     if brightness < 40:
         issues.append("Ảnh quá tối. Vui lòng chụp ở nơi đủ sáng.")
