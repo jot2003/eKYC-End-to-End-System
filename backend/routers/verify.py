@@ -3,7 +3,7 @@ import uuid
 import logging
 import traceback
 
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,8 @@ from backend.services.face_service import FaceService
 from backend.services.qr_service import decode_qr
 from backend.services.mrz_service import parse_mrz
 from backend.services.card_detector import detect_and_crop_card
+from backend.services.doc_classifier import classify_document
+from backend.services.liveness_service import verify_liveness
 from backend.utils.image_utils import read_image_from_bytes, save_upload
 from backend.utils.config import UPLOAD_PATH
 
@@ -392,6 +394,37 @@ async def get_result(request_id: str, db: Session = Depends(get_db)):
             "selfie": record.selfie_path,
         } if record.cccd_path else None,
     )
+
+
+@router.post("/liveness")
+async def check_liveness(
+    selfie_image: UploadFile = File(..., description="Selfie captured after liveness check"),
+    liveness_passed: bool = Form(True),
+):
+    """Verify liveness from client-side results + server-side image analysis."""
+    image_bytes = await selfie_image.read()
+    try:
+        img = read_image_from_bytes(image_bytes)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    result = verify_liveness(img, liveness_passed)
+    return result
+
+
+@router.post("/classify")
+async def classify_image(
+    image: UploadFile = File(..., description="Image to classify"),
+):
+    """Classify an image as cccd_front, cccd_back, or other."""
+    image_bytes = await image.read()
+    try:
+        img = read_image_from_bytes(image_bytes)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    result = classify_document(img)
+    return result
 
 
 @router.get("/health")

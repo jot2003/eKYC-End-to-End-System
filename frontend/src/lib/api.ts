@@ -34,6 +34,31 @@ export async function getStats() {
   return response.data;
 }
 
+export async function checkLiveness(selfieFile: File, livenessPassed: boolean): Promise<{
+  passed: boolean;
+  score: number;
+  checks: Record<string, boolean>;
+}> {
+  const formData = new FormData();
+  formData.append('selfie_image', selfieFile);
+  formData.append('liveness_passed', String(livenessPassed));
+  const response = await api.post('/liveness', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 30000,
+  });
+  return response.data;
+}
+
+export async function classifyDocument(file: File): Promise<{ type: string }> {
+  const formData = new FormData();
+  formData.append('image', file);
+  const response = await api.post('/classify', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 30000,
+  });
+  return response.data;
+}
+
 export async function healthCheck() {
   const response = await api.get('/health');
   return response.data;

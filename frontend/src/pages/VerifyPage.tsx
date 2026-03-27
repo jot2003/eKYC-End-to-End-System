@@ -2,8 +2,9 @@ import { useState } from 'react';
 import Stepper from '../components/Stepper';
 import ImageDropzone from '../components/ImageDropzone';
 import CameraCapture from '../components/CameraCapture';
+import LivenessCheck from '../components/LivenessCheck';
 import ResultView from '../components/ResultView';
-import { verifyIdentity } from '../lib/api';
+import { verifyIdentity, classifyDocument } from '../lib/api';
 import {
   ArrowLeft,
   ArrowRight,
@@ -13,6 +14,8 @@ import {
   Plus,
   Upload,
   Camera,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 
 const EKYC_STEPS = [
@@ -24,6 +27,7 @@ const EKYC_STEPS = [
 ];
 
 const PROCESSING_STEPS_FRONT_ONLY = [
+  'Phân loại tài liệu',
   'Kiểm tra chất lượng ảnh',
   'Tiền xử lý ảnh',
   'Trích xuất OCR (mặt trước)',
@@ -33,6 +37,7 @@ const PROCESSING_STEPS_FRONT_ONLY = [
 ];
 
 const PROCESSING_STEPS_WITH_BACK = [
+  'Phân loại tài liệu',
   'Kiểm tra chất lượng ảnh',
   'Tiền xử lý ảnh',
   'Trích xuất OCR (mặt trước)',
@@ -59,6 +64,11 @@ export default function VerifyPage() {
   const [frontPreview, setFrontPreview] = useState<string | null>(null);
   const [backPreview, setBackPreview] = useState<string | null>(null);
   const [selfiePreview, setSelfiePreview] = useState<string | null>(null);
+
+  const [classifying, setClassifying] = useState(false);
+  const [classifyError, setClassifyError] = useState<string | null>(null);
+  const [livenessMode, setLivenessMode] = useState(false);
+  const [livenessPassed, setLivenessPassed] = useState(false);
 
   const activeProcessingSteps = cccdBackFile
     ? PROCESSING_STEPS_WITH_BACK
@@ -104,6 +114,37 @@ export default function VerifyPage() {
     }
   }
 
+  async function handleAdvanceWithClassify(file: File, expectedType: string, nextStep: number) {
+    setClassifying(true);
+    setClassifyError(null);
+    try {
+      const result = await classifyDocument(file);
+      if (result.type === expectedType) {
+        setStep(nextStep);
+        setCameraOpen(false);
+      } else if (result.type === 'unknown') {
+        setStep(nextStep);
+        setCameraOpen(false);
+      } else {
+        const labels: Record<string, string> = {
+          cccd_front: 'CCCD mặt trước',
+          cccd_back: 'CCCD mặt sau',
+          other: 'không phải tài liệu hợp lệ',
+        };
+        const detected = labels[result.type] || result.type;
+        const expected = labels[expectedType] || expectedType;
+        setClassifyError(
+          `Ảnh được nhận dạng là "${detected}", nhưng bước này yêu cầu "${expected}". Vui lòng chụp/upload lại đúng ảnh.`
+        );
+      }
+    } catch {
+      setStep(nextStep);
+      setCameraOpen(false);
+    } finally {
+      setClassifying(false);
+    }
+  }
+
   function handleReset() {
     setStep(0);
     setCccdFrontFile(null);
@@ -116,6 +157,9 @@ export default function VerifyPage() {
     setBackPreview(null);
     setSelfiePreview(null);
     setCameraOpen(false);
+    setClassifyError(null);
+    setLivenessMode(false);
+    setLivenessPassed(false);
   }
 
   function handleCameraCapture(file: File, target: 'front' | 'back' | 'selfie') {
@@ -189,14 +233,20 @@ export default function VerifyPage() {
             />
           )}
 
+          {classifyError && step === 0 && (
+            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2">
+              <AlertTriangle size={16} className="text-amber-500 mt-0.5 shrink-0" />
+              <p className="text-xs text-amber-700">{classifyError}</p>
+            </div>
+          )}
           <StepActions>
             <div />
             <button
-              onClick={() => setStep(1)}
-              disabled={!cccdFrontFile}
+              onClick={() => cccdFrontFile && handleAdvanceWithClassify(cccdFrontFile, 'cccd_front', 1)}
+              disabled={!cccdFrontFile || classifying}
               className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
-              Tiếp tục <ArrowRight size={16} />
+              {classifying ? <><Loader2 size={16} className="animate-spin" /> Đang nhận dạng...</> : <>Tiếp tục <ArrowRight size={16} /></>}
             </button>
           </StepActions>
         </StepCard>
@@ -244,21 +294,28 @@ export default function VerifyPage() {
               để cross-check đa nguồn, tăng độ tin cậy. Bạn có thể bỏ qua nếu không có ảnh.
             </p>
           </div>
+          {classifyError && step === 1 && (
+            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2">
+              <AlertTriangle size={16} className="text-amber-500 mt-0.5 shrink-0" />
+              <p className="text-xs text-amber-700">{classifyError}</p>
+            </div>
+          )}
           <StepActions>
-            <BackButton onClick={() => { setStep(0); setCameraOpen(false); }} />
+            <BackButton onClick={() => { setStep(0); setCameraOpen(false); setClassifyError(null); }} />
             <div className="flex gap-3">
               <button
-                onClick={() => { setStep(2); setCameraOpen(false); }}
+                onClick={() => { setStep(2); setCameraOpen(false); setClassifyError(null); }}
                 className="flex items-center gap-2 text-slate-500 hover:text-slate-900 text-sm font-medium transition-colors"
               >
                 Bỏ qua <SkipForward size={16} />
               </button>
               {cccdBackFile && (
                 <button
-                  onClick={() => { setStep(2); setCameraOpen(false); }}
-                  className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                  onClick={() => handleAdvanceWithClassify(cccdBackFile, 'cccd_back', 2)}
+                  disabled={classifying}
+                  className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 transition-colors"
                 >
-                  Tiếp tục <ArrowRight size={16} />
+                  {classifying ? <><Loader2 size={16} className="animate-spin" /> Đang nhận dạng...</> : <>Tiếp tục <ArrowRight size={16} /></>}
                 </button>
               )}
             </div>
@@ -268,58 +325,110 @@ export default function VerifyPage() {
 
       {step === 2 && (
         <StepCard
-          title="Ảnh selfie"
-          subtitle="Chụp ảnh chân dung để so sánh với ảnh trên CCCD"
+          title="Ảnh selfie & Xác minh người thật"
+          subtitle="Chụp ảnh chân dung kèm kiểm tra liveness để xác minh danh tính"
         >
-          <InputModeTabs mode={inputMode} onChange={setInputMode} />
-
-          {inputMode === 'upload' && (
-            <ImageDropzone
-              onFileSelect={(f) => handleFileSelect(f, 'selfie')}
-              selectedFile={selfieFile}
-              label="Kéo thả ảnh selfie vào đây"
-            />
-          )}
-
-          {inputMode === 'camera' && !cameraOpen && (
-            <CameraStartButton
-              preview={selfiePreview}
-              fileName={selfieFile?.name}
-              onOpen={() => setCameraOpen(true)}
-              onClear={() => {
-                setSelfieFile(null);
-                setSelfiePreview(null);
+          {livenessMode ? (
+            <LivenessCheck
+              onComplete={(file, livenessResult) => {
+                const url = URL.createObjectURL(file);
+                setSelfieFile(file);
+                setSelfiePreview(url);
+                setLivenessPassed(livenessResult.passed);
+                setLivenessMode(false);
               }}
+              onClose={() => setLivenessMode(false)}
             />
+          ) : (
+            <>
+              <div className="flex gap-1 bg-slate-100 rounded-lg p-1 mb-4 w-fit">
+                <button
+                  onClick={() => setInputMode('upload')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                    inputMode === 'upload' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  <Upload size={14} /> Upload
+                </button>
+                <button
+                  onClick={() => setInputMode('camera')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                    inputMode === 'camera' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  <Camera size={14} /> Camera
+                </button>
+                <button
+                  onClick={() => { setLivenessMode(true); setInputMode('camera'); }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                    livenessMode ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  <Eye size={14} /> Liveness
+                </button>
+              </div>
+
+              {inputMode === 'upload' && (
+                <ImageDropzone
+                  onFileSelect={(f) => handleFileSelect(f, 'selfie')}
+                  selectedFile={selfieFile}
+                  label="Kéo thả ảnh selfie vào đây"
+                />
+              )}
+
+              {inputMode === 'camera' && !cameraOpen && (
+                <CameraStartButton
+                  preview={selfiePreview}
+                  fileName={selfieFile?.name}
+                  onOpen={() => setCameraOpen(true)}
+                  onClear={() => {
+                    setSelfieFile(null);
+                    setSelfiePreview(null);
+                    setLivenessPassed(false);
+                  }}
+                />
+              )}
+
+              {inputMode === 'camera' && cameraOpen && (
+                <CameraCapture
+                  mode="face"
+                  label="Đưa khuôn mặt vào khung hướng dẫn"
+                  onCapture={(f) => handleCameraCapture(f, 'selfie')}
+                  onClose={() => setCameraOpen(false)}
+                />
+              )}
+
+              {livenessPassed && selfieFile && (
+                <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg flex items-center gap-2">
+                  <Check size={16} className="text-green-500" />
+                  <p className="text-xs text-green-700 font-medium">Liveness check passed — xác minh người thật thành công</p>
+                </div>
+              )}
+
+              <div className="mt-4 bg-slate-50 rounded-lg p-4 border border-slate-100">
+                <p className="text-xs font-medium text-slate-600 mb-2">Hướng dẫn</p>
+                <ul className="space-y-1 text-xs text-slate-500">
+                  <li>Nhìn thẳng vào camera, đủ sáng</li>
+                  <li>Không đội mũ, không đeo kính râm</li>
+                  <li>Dùng <span className="font-medium text-blue-600">Liveness</span> để xác minh người thật (khuyến nghị)</li>
+                  <li>Hỗ trợ PNG, JPG, WEBP - tối đa 10MB</li>
+                </ul>
+              </div>
+            </>
           )}
 
-          {inputMode === 'camera' && cameraOpen && (
-            <CameraCapture
-              mode="face"
-              label="Đưa khuôn mặt vào khung hướng dẫn"
-              onCapture={(f) => handleCameraCapture(f, 'selfie')}
-              onClose={() => setCameraOpen(false)}
-            />
+          {!livenessMode && (
+            <StepActions>
+              <BackButton onClick={() => { setStep(1); setCameraOpen(false); }} />
+              <button
+                onClick={handleSubmit}
+                disabled={!selfieFile}
+                className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-lg shadow-blue-600/20"
+              >
+                <ShieldCheck size={16} /> Xác minh
+              </button>
+            </StepActions>
           )}
-
-          <div className="mt-4 bg-slate-50 rounded-lg p-4 border border-slate-100">
-            <p className="text-xs font-medium text-slate-600 mb-2">Hướng dẫn</p>
-            <ul className="space-y-1 text-xs text-slate-500">
-              <li>Nhìn thẳng vào camera, đủ sáng</li>
-              <li>Không đội mũ, không đeo kính râm</li>
-              <li>Hỗ trợ PNG, JPG, WEBP - tối đa 10MB</li>
-            </ul>
-          </div>
-          <StepActions>
-            <BackButton onClick={() => { setStep(1); setCameraOpen(false); }} />
-            <button
-              onClick={handleSubmit}
-              disabled={!selfieFile}
-              className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-lg shadow-blue-600/20"
-            >
-              <ShieldCheck size={16} /> Xác minh
-            </button>
-          </StepActions>
         </StepCard>
       )}
 
